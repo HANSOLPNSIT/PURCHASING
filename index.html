@@ -227,20 +227,29 @@
       await initFromWorkbookBytes(bytes);
     });
 
-    // 페이지 로드시 복원
-    (function restore(){
-      try{
-        const b64 = localStorage.getItem(LS_KEY);
-        if (b64){ const bytes = base64ToBytes(b64); initFromWorkbookBytes(bytes); }
-      }catch(_){ /* ignore */ }
-    })();
 
-    // 재업로드 버튼: 저장삭제 후 파일 선택
-    document.getElementById('reuploadBtn').addEventListener('click', ()=>{
-      try{ localStorage.removeItem(LS_KEY); }catch(_){}
-      fileInput.click();
-    });
+// 페이지 로드시: 1) 원격 data.xlsx 먼저 시도 → 2) 실패 시 localStorage 복원
+(async function restore(){
+  try {
+    const res = await fetch('data.xlsx', { cache: 'no-store' });
+    if (res.ok){
+      const buf = await res.arrayBuffer();
+      await initFromWorkbookBytes(new Uint8Array(buf));
+      return;
+    }
+  } catch (_) { /* ignore */ }
+  try {
+    const b64 = localStorage.getItem('excel_b64_v1');
+    if (b64){
+      const bytes = base64ToBytes(b64);
+      await initFromWorkbookBytes(bytes);
+      return;
+    }
+  } catch (_) { /* ignore */ }
+})();
+</script>
 
+  
     // ---------- 그리기 ----------
     function draw(){
       const mu = trunc0(parseFloat(meanEl.value));
@@ -402,3 +411,5 @@
   </script>
 </body>
 </html>
+
+
