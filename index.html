@@ -11,9 +11,9 @@
       --ink: #e5e7eb;       /* gray-200 */
       --muted: #9ca3af;     /* gray-400 */
       --brand: #60a5fa;     /* blue-400 */
-      --good: rgba(16,185,129,.28);   /* ±1σ */
-      --warn: rgba(234,179,8,.24);    /* ±2σ */
-      --bad:  rgba(248,113,113,.22);  /* ±3σ */
+      --good: rgba(16,185,129,.28);   /* ±1σ: green */
+      --warn: rgba(234,179,8,.24);    /* ±2σ: yellow */
+      --bad:  rgba(248,113,113,.22);  /* ±3σ: pinkish red */
     }
     * { box-sizing: border-box; }
     body { margin: 0; background: var(--bg); color: var(--ink);
@@ -35,7 +35,7 @@
     input[type="number"] { appearance: textfield; }
     .btn { background: linear-gradient(90deg, #60a5fa, #34d399); border: none; color: #0b1220; font-weight: 700; padding: 10px 14px; border-radius: 12px; cursor: pointer; }
     .btn:active { transform: translateY(1px); }
-    .btn.ghost { background: transparent; border:1px solid rgba(255,255,255,.15); color: var(--ink); }
+    .btn.ghost { background: transparent; border:1px solid rgba(255,255,255,.15); color: #e5e7eb; }
 
     .legend { display:flex; flex-wrap: wrap; gap: 10px; font-size: 12px; color: var(--muted); }
     .swatch { width: 14px; height: 14px; border-radius: 3px; display:inline-block; margin-right: 6px; vertical-align: -2px; }
@@ -60,11 +60,9 @@
     .statLine { position:absolute; right:14px; top:30px; font-size:13px; color:#e5e7eb; opacity:.95 }
     .chartWrap { position:relative; }
 
+    /* 업로드 영역: 하단에 작게 */
     .uploadWrap { margin-top: 18px; display:flex; justify-content:flex-end; gap:10px; align-items:center; color: var(--muted); font-size:12px; }
     #fileInput { display:none; }
-
-    /* 숨김 유틸 */
-    .hidden { display: none !important; }
   </style>
 </head>
 <body>
@@ -117,7 +115,7 @@
           <div><span class="swatch" style="background:var(--good)"></span>±1σ: |x-μ| ≤ 1σ (초록)</div>
           <div><span class="swatch" style="background:var(--warn)"></span>±2σ: 1σ < |x-μ| ≤ 2σ (노랑)</div>
           <div><span class="swatch" style="background:var(--bad)"></span>±3σ: 2σ < |x-μ| ≤ 3σ (핑크)</div>
-          <div><span class="swatch" style="background:#ffffff)"></span>정규분포선(PDF, 흰색)</div>
+          <div><span class="swatch" style="background:#ffffff"></span>정규분포선(PDF, 흰색)</div>
         </div>
 
         <div class="results" id="rangesBox"></div>
@@ -171,9 +169,35 @@
     const ddlB = document.getElementById('ddlB');
     const fileInput = document.getElementById('fileInput');
 
-    let wbGlobal = null;
-    let statMax = null, statMin = null;
-    let dataSource = 'remote';
+    // === 결과 표시 통제 엘리먼트/유틸 ===
+    const chartCard = document.querySelector('.card.chartWrap');
+    const axisBoxWrap = document.getElementById('axisBox');
+
+    function clearVisuals(){
+      try{ ctx.clearRect(0,0,canvas.width,canvas.height); }catch(_){}
+      xTicksEl.textContent = '';
+      yTicksEl.textContent = '';
+      statLine.textContent = '';
+      rangesBox.innerHTML = '';
+      xinfo.textContent = '';
+    }
+    function setEmptyState(isEmpty){
+      if(isEmpty){
+        meanEl.value = '';
+        stdEl.value  = '';
+        statMax = null; statMin = null;
+        chartCard.style.display = 'none';
+        axisBoxWrap.style.display = 'none';
+        clearVisuals();
+      }else{
+        chartCard.style.display = 'block';
+        axisBoxWrap.style.display = 'grid';
+      }
+    }
+
+    let wbGlobal = null; // 워크북
+    let statMax = null, statMin = null; // 선택 조건의 최대/최소 (천원 단위)
+    let dataSource = 'remote'; // 'remote' | 'local' (표시용)
 
     // ---------- 유틸 ----------
     const trunc0 = (n) => (n>=0? Math.floor(n): Math.ceil(n)); // 소수 절삭
@@ -181,34 +205,15 @@
     const fmtPlain = (n) => { if (!isFinite(n)) return '-'; return trunc0(n).toLocaleString('ko-KR'); };
     function pdf(x, mu, sigma){ const a = 1 / (sigma * Math.sqrt(2*Math.PI)); const e = Math.exp(-0.5 * Math.pow((x-mu)/sigma, 2)); return a * e; }
     function cdf_approx(x, mu, sigma){ const z = (x - mu) / (sigma * Math.SQRT2); const t = 1 / (1 + 0.3275911 * Math.abs(z)); const a1=0.254829592, a2=-0.284496736, a3=1.421413741, a4=-1.453152027, a5=1.061405429; const erf = 1 - (((((a5*t + a4)*t) + a3)*t + a2)*t + a1)*t*Math.exp(-z*z); const sign = z < 0 ? -1 : 1; return 0.5 * (1 + sign * erf); }
-    function setOptions(select, arr, initial){ select.innerHTML = ''; const uniq = Array.from(new Set(arr.filter(v=>v!=='' && v!=null))); if (uniq.length===0 && initial) uniq.push(initial); uniq.forEach(v=>{ const opt = document.createElement('option'); opt.value = v; opt.textContent = v; select.appendChild(opt); }); if (initial!=null && uniq.includes(initial)) select.value = initial; }
-
-    // ----- 화면 표시/숨김 헬퍼 -----
-    function setAvailability(hasData){
-      const axisBox = document.getElementById('axisBox');
-      const show = !!hasData;
-
-      // 그래프/축 토글
-      canvas.classList.toggle('hidden', !show);
-      axisBox.classList.toggle('hidden', !show);
-
-      if (!show){
-        try { ctx.clearRect(0,0,canvas.width, canvas.height); } catch(_){}
-        rangesBox.innerHTML = '';
-        xTicksEl.textContent = '';
-        yTicksEl.textContent = '';
-        statLine.textContent = '';
-        xinfo.innerHTML = '<span style="color:#fca5a5">선택한 조건의 데이터가 없습니다.</span>';
-        // 입력값도 비움
-        meanEl.value = '';
-        stdEl.value = '';
-      } else {
-        xinfo.textContent = '';
-      }
-    }
-    function clearUI(msg){
-      setAvailability(false);
-      if (msg) xinfo.innerHTML = `<span style="color:#fca5a5">${msg}</span>`;
+    function setOptions(select, arr, initial){
+      select.innerHTML = '';
+      const uniq = Array.from(new Set(arr.filter(v=>v!=='' && v!=null)));
+      if (uniq.length===0 && initial) uniq.push(initial);
+      uniq.forEach(v=>{
+        const opt = document.createElement('option');
+        opt.value = v; opt.textContent = v; select.appendChild(opt);
+      });
+      if (initial!=null && uniq.includes(initial)) select.value = initial;
     }
 
     // === localStorage: 엑셀 바이너리 임시 저장/복원 ===
@@ -225,11 +230,9 @@
       let listA = [];
       if (wb.Sheets['분류비율']){
         const wsCat = wb.Sheets['분류비율'];
-        // A2 ~ 데이터가 있는 행까지
-        for(let r=2; r<=9999; r++){
+        for(let r=2; r<=12; r++){
           const cell = wsCat['A'+r];
-          if(!cell || cell.v==null || String(cell.v).trim()==='') break;
-          listA.push(String(cell.v).trim());
+          if(cell && cell.v!=null && String(cell.v).trim()!=='') listA.push(String(cell.v).trim());
         }
         sheetInfo.push(`대분류 원본: <b>분류비율</b>`);
       } else {
@@ -241,9 +244,10 @@
       const listB = ['초급','중급','고급','특급'];
       setOptions(ddlB, listB, '초급');
 
-      // 계산 & 그리기
-      const ok = computeFromFormulas();
-      if (ok) draw();
+      // 계산 & 그리기 (데이터 없으면 감춤)
+      const hasData = computeFromFormulas();
+      setEmptyState(!hasData);
+      if (hasData) draw();
 
       const srcTag = dataSource==='local' ? '로컬(임시저장)' : 'data.xlsx(원격)';
       sheetInfo.push(`데이터 소스: <b>${srcTag}</b>`);
@@ -255,12 +259,14 @@
       const file = e.target.files[0]; if(!file) return;
       const buf = await file.arrayBuffer();
       const bytes = new Uint8Array(buf);
+      // localStorage 저장
       try { localStorage.setItem(LS_KEY, bytesToBase64(bytes)); } catch(_) {}
       dataSource = 'local';
+      // 초기화 및 셋업
       await initFromWorkbookBytes(bytes);
     });
 
-    // 페이지 로드시: 1) 원격 data.xlsx 먼저 시도 → 2) 실패 시 localStorage 복원
+    // 페이지 로드시: 1) 원격 data.xlsx 먼저 시도 → 2) 실패 시 localStorage 복원 → 3) 둘 다 없으면 빈 상태
     (async function restore(){
       try{
         const res = await fetch('data.xlsx', { cache: 'no-store' });
@@ -270,7 +276,7 @@
           await initFromWorkbookBytes(new Uint8Array(buf));
           return;
         }
-      }catch(_){}
+      }catch(_){ /* ignore and fallback */ }
       try{
         const b64 = localStorage.getItem(LS_KEY);
         if (b64){
@@ -279,12 +285,12 @@
           await initFromWorkbookBytes(bytes);
           return;
         }
-      }catch(_){}
-      // 아무 데이터도 없으면 초기 화면 숨김
-      clearUI('엑셀 파일을 업로드해 주세요.');
+      }catch(_){ /* ignore */ }
+      // 둘 다 없으면 대기(빈 화면 유지)
+      setEmptyState(true);
     })();
 
-    // 재업로드 버튼
+    // 재업로드 버튼: 저장삭제 후 파일 선택
     document.getElementById('reuploadBtn').addEventListener('click', ()=>{
       try{ localStorage.removeItem(LS_KEY); }catch(_){}
       fileInput.click();
@@ -296,13 +302,6 @@
       const sigma = Math.abs(trunc0(parseFloat(stdEl.value)));
       const mul = 3;
 
-      // 평균/표준편차가 없거나 0이면 숨김
-      if(!isFinite(mu) || !isFinite(sigma) || sigma === 0){
-        clearUI('선택한 조건의 데이터가 없습니다.');
-        return;
-      }
-      setAvailability(true);
-
       // DPI 보정
       const ratio = window.devicePixelRatio || 1;
       const displayWidth = canvas.clientWidth || canvas.width;
@@ -310,6 +309,12 @@
       canvas.width = Math.round(displayWidth * ratio);
       canvas.height = Math.round(displayHeight * ratio);
       ctx.setTransform(ratio,0,0,ratio,0,0);
+
+      // 유효값 아니면 전부 비움
+      if(!isFinite(mu) || !isFinite(sigma) || sigma === 0){
+        clearVisuals();
+        return;
+      }
 
       // 기본 치수
       ctx.clearRect(0,0,canvas.width, canvas.height);
@@ -321,7 +326,7 @@
       const xmin = mu - mul*sigma;
       const xmax = mu + mul*sigma;
 
-      // X축: 73포인트
+      // X축: SEQUENCE(73,1, μ-3σ, (6σ)/70)
       const X = Array.from({length:73}, (_,i)=> mu - 3*sigma + i * (6*sigma/70));
 
       // CSS 색
@@ -357,7 +362,7 @@
         ctx.fillRect(xToPx(L), padT, xToPx(R)-xToPx(L), plotH);
       });
 
-      // 격자 + Y축 눈금
+      // 격자 + Y축 눈금(소수 5자리)
       ctx.strokeStyle = 'rgba(255,255,255,.12)';
       ctx.lineWidth = 1;
       ctx.beginPath();
@@ -378,7 +383,7 @@
         ctx.fillText(val.toFixed(5), padL - 8, gy);
       }
 
-      // 밴드 채움(PDF 영역별)
+      // 밴드 채움(PDF 영역별 채우기)
       const fillBandArea = (L, R, color) => {
         const Lc = Math.max(L, xmin), Rc = Math.min(R, xmax);
         if (Lc>=Rc) return;
@@ -401,7 +406,7 @@
       fillBandArea(mu+1*sigma, mu+2*sigma, colWarn);
       fillBandArea(mu+2*sigma, mu+3*sigma, colBad);
 
-      // 정규분포선 윤곽
+      // 정규분포선 윤곽(흰색)
       ctx.beginPath();
       for(let i=0;i<X.length;i++){
         const px = xToPx(X[i]);
@@ -416,7 +421,7 @@
       ctx.setLineDash([6,6]);
       ctx.strokeStyle = 'rgba(255,255,255,.35)';
       ctx.lineWidth = 1.2;
-      for(let k=-3; k<=3; k++){
+      for(let k=-mul; k<=mul; k++){
         const x = mu + k*sigma;
         ctx.beginPath();
         ctx.moveTo(xToPx(x), padT);
@@ -425,7 +430,7 @@
       }
       ctx.setLineDash([]);
 
-      // X축 라벨: 밴드 중앙
+      // X축 라벨: 밴드 중앙 아래 이름/값
       ctx.fillStyle = '#e5e7eba8';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
@@ -470,7 +475,7 @@
         if(target) target.classList.add('highlight');
       }
 
-      // 밴드별 X 요약
+      // 밴드별 X 요약 (X 생성 기반)
       const bandVals = {1:[], 2:[], 3:[]};
       X.forEach(x=>{
         const d = Math.abs(x - mu);
@@ -497,8 +502,7 @@
       rangesBox.innerHTML = pillHtml(1) + pillHtml(2) + pillHtml(3);
 
       // 텍스트 박스 눈금
-      const xTicks = bands.map(b=> fmtK(b.cx)).join('  |  ');
-      xTicksEl.textContent = xTicks;
+      xTicksEl.textContent = bands.map(b=> fmtK(b.cx)).join('  |  ');
       const yTicks = [];
       for(let g=0; g<=5; g++){
         const val = ((5-g)/5) * maxY;
@@ -506,7 +510,7 @@
       }
       yTicksEl.textContent = yTicks.join('  |  ');
 
-      // 상단 요약
+      // 차트 상단(단위 아래) 한 줄 요약: 평균/최대/최소
       if (isFinite(statMax) && isFinite(statMin) && isFinite(mu)){
         statLine.textContent = `평균: ${fmtK(mu)} · 최대: ${fmtPlain(statMax)} · 최소: ${fmtPlain(statMin)}`;
       } else {
@@ -517,14 +521,12 @@
     // 평균/표준편차/최대/최소 계산 (외주용역 P/U/Z, 502~729)
     function computeFromFormulas(){
       try{
-        if(!wbGlobal) { setAvailability(false); return false; }
+        if(!wbGlobal) return false;
         const ws = wbGlobal.Sheets['외주용역'];
-        if(!ws) { setAvailability(false); return false; }
-
-        const selA = ddlA.value; // 대분류
-        const selB = ddlB.value; // 중분류
+        if(!ws) return false;
+        const selA = ddlA.value; // A2
+        const selB = ddlB.value; // B2
         const vals = [];
-
         for(let r=502; r<=729; r++){
           const p = ws['P'+r];
           const u = ws['U'+r];
@@ -534,64 +536,63 @@
           const Zv = z? Number(String(z.v).replace(/,/g,'')) : NaN;
           if (Pv===selA && Uv===selB && isFinite(Zv)) vals.push(Zv);
         }
-
         if (!vals.length){
+          meanEl.value = '';
+          stdEl.value  = '';
           statMax = null; statMin = null;
-          meanEl.value = ''; stdEl.value = '';
-          setAvailability(false);
           return false;
         }
-
-        // 평균/표준편차/최대/최소 (천원)
+        // 평균 = AVERAGE(...)/1000
         const mean = vals.reduce((s,x)=>s+x,0)/vals.length / 1000;
-        const m0   = vals.reduce((s,x)=>s+x,0)/vals.length;
-        const varP = vals.reduce((s,x)=> s + (x-m0)*(x-m0), 0) / vals.length;
-        const stdevP = Math.sqrt(varP) / 1000;
-
+        // 표준편차 = STDEV.P(...)/1000
+        const m0 = vals.reduce((s,x)=>s+x,0)/vals.length;
+        const varPop = vals.reduce((s,x)=> s + (x-m0)*(x-m0), 0) / vals.length;
+        const stdevP = Math.sqrt(varPop) / 1000;
+        // 최대/최소 = MAX/MIN(...)/1000
         statMax = Math.max(...vals) / 1000;
         statMin = Math.min(...vals) / 1000;
 
         meanEl.value = trunc0(mean);
         stdEl.value  = trunc0(stdevP);
-
-        setAvailability(true);
         return true;
-      }catch(e){
-        statMax = null; statMin = null;
-        meanEl.value = ''; stdEl.value = '';
-        setAvailability(false);
-        return false;
-      }
+      }catch(e){ return false; }
     }
 
     // 이벤트
     document.getElementById('calcBtn').addEventListener('click', ()=>{
       const ok = computeFromFormulas();
-      if(!ok){ return; }
-      draw();
+      setEmptyState(!ok);
+      if (ok) draw();
     });
+
     document.getElementById('resetBtn').addEventListener('click', () => {
       if (ddlA.options.length) ddlA.selectedIndex = 0;
       if (ddlB.options.length) ddlB.selectedIndex = 0;
       xEl.value = '';
       const ok = computeFromFormulas();
-      if(!ok){ return; }
-      draw();
+      setEmptyState(!ok);
+      if (ok) draw();
     });
+
     ddlA.addEventListener('change', ()=>{
       const ok = computeFromFormulas();
-      if(!ok){ return; }
-      draw();
+      setEmptyState(!ok);
+      if (ok) draw();
     });
+
     ddlB.addEventListener('change', ()=>{
       const ok = computeFromFormulas();
-      if(!ok){ return; }
+      setEmptyState(!ok);
+      if (ok) draw();
+    });
+
+    window.addEventListener('resize', ()=>{
+      if (chartCard.style.display === 'none') return;
       draw();
     });
-    window.addEventListener('resize', draw);
 
     // 초기 렌더(엑셀 미업로드시 빈 상태)
-    clearUI('엑셀 파일을 업로드해 주세요.');
+    setEmptyState(true);
   </script>
 </body>
 </html>
